@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:ftp="http://www.mulesoft.org/schema/mule/ee/ftp" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:sfdc="http://www.mulesoft.org/schema/mule/sfdc" xmlns:batch="http://www.mulesoft.org/schema/mule/batch" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/sfdc http://www.mulesoft.org/schema/mule/sfdc/current/mule-sfdc.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/ee/ftp http://www.mulesoft.org/schema/mule/ee/ftp/current/mule-ftp-ee.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd">
+
+	<context:property-placeholder location="config.properties"/>
+    <sfdc:config name="Salesforce__Basic_Authentication" username="${userSalesForce}" password="${passSalesForce}" securityToken="${tokenSalesForce}" doc:name="Salesforce: Basic Authentication"/>
+    <file:connector name="File" autoDelete="false" outputAppend="true" streaming="true" validateConnections="true" doc:name="File"/>
+    <batch:job name="snd-batchBatch">
+        <batch:input>
+            <poll doc:name="Poll">
+                <fixed-frequency-scheduler frequency="${frequencyPollBatch}"/>
+                <watermark variable="nextSync" default-expression="2014-01-01T00:00:00.000Z" selector="MAX" selector-expression="#[payload.LastModifiedDate]"/>
+                <sfdc:query config-ref="Salesforce__Basic_Authentication" query="dsql:SELECT Email,Phone,FirstName,Id,LastModifiedDate,LastName FROM Contact WHERE CreatedDate &gt;= #[flowVars['nextSync']] ORDER BY LastModifiedDate ASC" doc:name="New Contacts"/>
+            </poll>
+        </batch:input>
+        <batch:process-records>
+            <batch:step name="Batch_Step">
+                <logger message="LastName: #[payload.LastName]" level="INFO" doc:name="Logger"/>
+                <batch:commit streaming="true" doc:name="Batch Commit">
+                    <dw:transform-message metadata:id="7cce3bd6-d8bd-4198-b829-6b05f64b7c85" doc:name="Transform Message">
+                        <dw:set-payload><![CDATA[%dw 1.0
+%output application/csv header=false
+---
+payload map ((payload01 , indexOfPayload01) -> {
+	lastName: payload01.LastName,
+	firstName: payload01.FirstName,
+	email: payload01.Email,
+	phone: payload01.Phone
+})]]></dw:set-payload>
+                    </dw:transform-message>
+                    <file:outbound-endpoint path="${pathDownloadCSV}" outputPattern="${nameCSV}" connector-ref="File" responseTimeout="10000" doc:name="CSV"/>
+                </batch:commit>
+            </batch:step>
+        </batch:process-records>
+        <batch:on-complete>
+            <logger message="Total Records Loaded: #[message.payload.getLoadedRecords()], Failed Records: #[message.payload.getFailedRecords()], Processing time: #[message.payload.getElapsedTimeInMillis()]" level="INFO" doc:name="Logger"/>
+        </batch:on-complete>
+    </batch:job>
+</mule>
